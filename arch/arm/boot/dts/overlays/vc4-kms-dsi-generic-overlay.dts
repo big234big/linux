@@ -18,32 +18,34 @@
 			panel: panel-dsi-generic@0 {
 				// See panel-dsi.yaml binding
 				// Using dummy name for panel model
-				compatible = "Generic,panel-dsi","panel-dsi";
+				compatible = "leadtek,ltk050h3146w";
 				reg = <0>;
 				power-supply = <0>;
 				backlight = <0>;
 				dsi-color-format = "RGB888";
 				mode = "MODE_VIDEO";
-				width-mm = <0>;
-				height-mm = <0>;
+				width-mm = <62>;
+				height-mm = <110>;
 
 				port {
 					panel_dsi_port: endpoint {
-						data-lanes = <1>;
+						data-lanes = <4>;
 						remote-endpoint = <&dsi_out>;
 					};
 				};
 
 				timing: panel-timing {
-					clock-frequency = <30000000>;
-					hactive = <840>;
-					vactive = <480>;
-					hback-porch = <44>;
-					hfront-porch = <46>;
-					hsync-len = <2>;
-					vback-porch = <18>;
-					vfront-porch = <16>;
-					vsync-len = <2>;
+	.hdisplay	= 720,
+	.hsync_start	= 720 + 42,
+	.hsync_end	= 720 + 42 + 8,
+	.htotal		= 720 + 42 + 8 + 42,
+	.vdisplay	= 1280,
+	.vsync_start	= 1280 + 12,
+	.vsync_end	= 1280 + 12 + 4,
+	.vtotal		= 1280 + 12 + 4 + 18,
+	.clock		= 64018,
+	.width_mm	= 62,
+	.height_mm	= 110,
 				};
 			};
 		};
