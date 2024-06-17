@@ -1,71 +1,51 @@
+/*
+ * vc4-kms-dpi-generic-overlay.dts
+ */
+
 /dts-v1/;
 /plugin/;
+
+#include "vc4-kms-dpi.dtsi"
 
 / {
 	compatible = "brcm,bcm2835";
 
-	dsi_frag: fragment@0 {
-		target = <&dsi1>;
-		__overlay__{
-			status = "okay";
-			#address-cells = <1>;
-			#size-cells = <0>;
-			port {
-				dsi_out:endpoint {
-					remote-endpoint = <&panel_dsi_port>;
-				};
-			};
-			panel: panel-dsi-generic@0 {
-				// See panel-dsi.yaml binding
-				// Using dummy name for panel model
-				compatible = "leadtek,ltk050h3146w";
-				reg = <0>;
-				power-supply = <0>;
-				backlight = <0>;
-				dsi-color-format = "RGB888";
-				mode = "MODE_VIDEO";
-				width-mm = <62>;
-				height-mm = <110>;
+	fragment@0 {
+		target = <&panel>;
+		panel_generic: __overlay__  {
+			compatible = "panel-dpi";
 
-				port {
-					panel_dsi_port: endpoint {
-						data-lanes = <4>;
-						remote-endpoint = <&dsi_out>;
-					};
+			width-mm = <154>;
+			height-mm = <83>;
+			bus-format = <0x1009>;
+
+			timing: panel-timing {
+				clock-frequency = <29500000>;
+				hactive = <800>;
+				hfront-porch = <24>;
+				hsync-len = <72>;
+				hback-porch = <96>;
+				hsync-active = <1>;
+				vactive = <480>;
+				vfront-porch = <3>;
+				vsync-len = <10>;
+				vback-porch = <7>;
+				vsync-active = <1>;
+
+				de-active = <1>;
+				pixelclk-active = <1>;
+			};
 		};
 	};
 
 	fragment@1 {
-		target = <&panel_dsi_port>;
-		__dormant__ {
-			data-lanes = <1>;
-		};
-	};
-
-	fragment@2 {
-		target = <&panel_dsi_port>;
-		__dormant__ {
-			data-lanes = <1 2>;
-		};
-	};
-
-	fragment@3 {
-		target = <&panel_dsi_port>;
-		__dormant__ {
-			data-lanes = <1 2 3>;
-		};
-	};
-
-	fragment@4 {
-		target = <&panel_dsi_port>;
-		__dormant__ {
-			data-lanes = <1 2 3 4>;
+		target = <&dpi>;
+		dpi_node_generic: __overlay__  {
+			pinctrl-0 = <&dpi_18bit_gpio0>;
 		};
 	};
 
 	__overrides__ {
-		dsi0 = <&dsi_frag>, "target:0=",<&dsi0>;
-
 		clock-frequency = <&timing>, "clock-frequency:0";
 		hactive = <&timing>, "hactive:0";
 		hfp = <&timing>, "hfront-porch:0";
@@ -75,18 +55,27 @@
 		vfp = <&timing>, "vfront-porch:0";
 		vsync = <&timing>, "vsync-len:0";
 		vbp = <&timing>, "vback-porch:0";
+		hsync-invert = <&timing>, "hsync-active:0=0";
+		vsync-invert = <&timing>, "vsync-active:0=0";
+		de-invert = <&timing>, "de-active:0=0";
+		pixclk-invert = <&timing>, "pixelclk-active:0=0";
 
 		width-mm = <&panel>, "width-mm:0";
 		height-mm = <&panel>, "height-mm:0";
 
-		rgb565 = <&panel>, "dsi-color-format=RGB565";
-		rgb666p = <&panel>, "dsi-color-format=RGB666_PACKED";
-		rgb666 = <&panel>, "dsi-color-format=RGB666";
-		rgb888 = <&panel>, "dsi-color-format=RGB888";
-		one-lane = <0>,"+1";
-		two-lane = <0>,"+2";
-		three-lane = <0>,"+3";
-		four-lane = <0>,"+4";
+		rgb565 = <&panel_generic>, "bus-format:0=0x1017",
+			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_16bit_gpio0>;
+		rgb565-padhi = <&panel_generic>, "bus-format:0=0x1020",
+			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_16bit_cpadhi_gpio0>;
+		bgr666 = <&panel_generic>, "bus-format:0=0x101f";
+		bgr666-padhi = <&panel_generic>, "bus-format:0=0x101e",
+			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_18bit_cpadhi_gpio0>;
+		rgb666-padhi = <&panel_generic>, "bus-format:0=0x1015",
+			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_18bit_cpadhi_gpio0>;
+		bgr888 = <&panel_generic>, "bus-format:0=0x1013",
+			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_gpio0>;
+		rgb888 = <&panel_generic>, "bus-format:0=0x100a",
+			<&dpi_node_generic>, "pinctrl-0:0=",<&dpi_gpio0>;
+		bus-format = <&panel_generic>, "bus-format:0";
 	};
-
 };
