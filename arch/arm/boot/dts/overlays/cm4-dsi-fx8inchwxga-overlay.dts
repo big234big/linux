@@ -75,13 +75,13 @@
             };
 
             fx8inchwxga{
-                compatible    = "fx8inchwxga";
+                compatible    = "fx,fx8inchwxga";
                 status        = "okay";
                 reg           = <0>;
                 vc4_dsi       = <&dsi1>;
 
                 pinctrl-names = "default";
-                pinctrl-0 = <&jdi_panel_pins>;
+                pinctrl-0 = <&fx8inchwxga_pins>;
                 reset-gpios   = <&ioexp 3 1>;
                 enable-gpios  = <&ioexp 4 0>;
                 dcdc-en-gpios = <&ioexp 5 0>;
