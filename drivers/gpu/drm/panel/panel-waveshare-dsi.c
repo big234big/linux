@@ -22,9 +22,9 @@
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_panel.h>
 
-#define WS_DSI_DRIVER_NAME "ws-ts-dsi"
+#define FX_DSI_DRIVER_NAME "fx-ts-dsi"
 
-struct ws_panel {
+struct fx_panel {
 	struct drm_panel base;
 	struct mipi_dsi_device *dsi;
 	struct i2c_client *i2c;
@@ -32,130 +32,42 @@ struct ws_panel {
 	enum drm_panel_orientation orientation;
 };
 
-/* 2.8inch 480x640
- * https://www.waveshare.com/product/raspberry-pi/displays/2.8inch-dsi-lcd.htm
- */
-static const struct drm_display_mode ws_panel_2_8_mode = {
-	.clock = 50000,
-	.hdisplay = 480,
-	.hsync_start = 480 + 150,
-	.hsync_end = 480 + 150 + 50,
-	.htotal = 480 + 150 + 50 + 150,
-	.vdisplay = 640,
-	.vsync_start = 640 + 150,
-	.vsync_end = 640 + 150 + 50,
-	.vtotal = 640 + 150 + 50 + 150,
+struct fx_panel_data {
+	const struct drm_display_mode *mode;
+	int lanes;
+	unsigned long mode_flags;
 };
 
-/* 3.4inch 800x800 Round
- * https://www.waveshare.com/product/displays/lcd-oled/3.4inch-dsi-lcd-c.htm
- */
-static const struct drm_display_mode ws_panel_3_4_mode = {
-	.clock = 50000,
-	.hdisplay = 800,
-	.hsync_start = 800 + 32,
-	.hsync_end = 800 + 32 + 6,
-	.htotal = 800 + 32 + 6 + 120,
-	.vdisplay = 800,
-	.vsync_start = 800 + 8,
-	.vsync_end = 800 + 8 + 4,
-	.vtotal = 800 + 8 + 4 + 16,
+/* 自定义显示屏时序 - 根据设备树参数转换 */
+static const struct drm_display_mode custom_panel_mode = {
+	.clock = 72400,            // clock-frequency = <72400000> (kHz单位)
+	.hdisplay = 1280,          // hactive = <1280>
+	.hsync_start = 1280 + 72,  // hfront-porch = <72>
+	.hsync_end = 1280 + 72 + 10, // hsync-len = <10>
+	.htotal = 1280 + 72 + 10 + 78, // hback-porch = <78>
+	.vdisplay = 800,           // vactive = <800>
+	.vsync_start = 800 + 15,   // vfront-porch = <15>
+	.vsync_end = 800 + 15 + 5, // vsync-len = <5>
+	.vtotal = 800 + 15 + 5 + 18, // vback-porch = <18>
+	.vrefresh = 60,            // 计算刷新率：72400000/(1440*838)≈60.1Hz
+	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC |  // hsync-active<0, vsync-active<0
+		 DRM_MODE_FLAG_NCSYNC |  // de-active = <0>
+		 DRM_MODE_FLAG_PCSYNC,   // pixelclk-active =<1>
+	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
-/* 4.0inch 480x800
- * https://www.waveshare.com/product/raspberry-pi/displays/4inch-dsi-lcd.htm
- */
-static const struct drm_display_mode ws_panel_4_0_mode = {
-	.clock = 50000,
-	.hdisplay = 480,
-	.hsync_start = 480 + 150,
-	.hsync_end = 480 + 150 + 100,
-	.htotal = 480 + 150 + 100 + 150,
-	.vdisplay = 800,
-	.vsync_start = 800 + 20,
-	.vsync_end = 800 + 20 + 100,
-	.vtotal = 800 + 20 + 100 + 20,
+static const struct fx_panel_data custom_panel_data = {
+	.mode = &custom_panel_mode,
+	.lanes = 2,
+	.mode_flags = MIPI_DSI_MODE_VIDEO_HSE | MIPI_DSI_MODE_VIDEO | MIPI_DSI_CLOCK_NON_CONTINUOUS,
 };
 
-/* 7.0inch C 1024x600
- * https://www.waveshare.com/product/raspberry-pi/displays/lcd-oled/7inch-dsi-lcd-c-with-case-a.htm
- */
-static const struct drm_display_mode ws_panel_7_0_c_mode = {
-	.clock = 50000,
-	.hdisplay = 1024,
-	.hsync_start = 1024 + 100,
-	.hsync_end = 1024 + 100 + 100,
-	.htotal = 1024 + 100 + 100 + 100,
-	.vdisplay = 600,
-	.vsync_start = 600 + 10,
-	.vsync_end = 600 + 10 + 10,
-	.vtotal = 600 + 10 + 10 + 10,
-};
-
-/* 7.9inch 400x1280
- * https://www.waveshare.com/product/raspberry-pi/displays/7.9inch-dsi-lcd.htm
- */
-static const struct drm_display_mode ws_panel_7_9_mode = {
-	.clock = 50000,
-	.hdisplay = 400,
-	.hsync_start = 400 + 40,
-	.hsync_end = 400 + 40 + 30,
-	.htotal = 400 + 40 + 30 + 40,
-	.vdisplay = 1280,
-	.vsync_start = 1280 + 20,
-	.vsync_end = 1280 + 20 + 10,
-	.vtotal = 1280 + 20 + 10 + 20,
-};
-
-/* 8.0inch or 10.1inch 1280x800
- * https://www.waveshare.com/product/raspberry-pi/displays/8inch-dsi-lcd-c.htm
- * https://www.waveshare.com/product/raspberry-pi/displays/10.1inch-dsi-lcd-c.htm
- */
-static const struct drm_display_mode ws_panel_10_1_mode = {
-	.clock = 83333,
-	.hdisplay = 1280,
-	.hsync_start = 1280 + 156,
-	.hsync_end = 1280 + 156 + 20,
-	.htotal = 1280 + 156 + 20 + 40,
-	.vdisplay = 800,
-	.vsync_start = 800 + 40,
-	.vsync_end = 800 + 40 + 48,
-	.vtotal = 800 + 40 + 48 + 40,
-};
-
-/* 11.9inch 320x1480
- * https://www.waveshare.com/product/raspberry-pi/displays/11.9inch-dsi-lcd.htm
- */
-static const struct drm_display_mode ws_panel_11_9_mode = {
-	.clock = 50000,
-	.hdisplay = 320,
-	.hsync_start = 320 + 60,
-	.hsync_end = 320 + 60 + 60,
-	.htotal = 320 + 60 + 60 + 60,
-	.vdisplay = 1480,
-	.vsync_start = 1480 + 60,
-	.vsync_end = 1480 + 60 + 60,
-	.vtotal = 1480 + 60 + 60 + 60,
-};
-
-static const struct drm_display_mode ws_panel_4_mode = {
-	.clock = 50000,
-	.hdisplay = 720,
-	.hsync_start = 720 + 32,
-	.hsync_end = 720 + 32 + 200,
-	.htotal = 720 + 32 + 200 + 120,
-	.vdisplay = 720,
-	.vsync_start = 720 + 8,
-	.vsync_end = 720 + 8 + 4,
-	.vtotal = 720 + 8 + 4 + 16,
-};
-
-static struct ws_panel *panel_to_ts(struct drm_panel *panel)
+static struct fx_panel *panel_to_ts(struct drm_panel *panel)
 {
-	return container_of(panel, struct ws_panel, base);
+	return container_of(panel, struct fx_panel, base);
 }
 
-static void ws_panel_i2c_write(struct ws_panel *ts, u8 reg, u8 val)
+static void fx_panel_i2c_write(struct fx_panel *ts, u8 reg, u8 val)
 {
 	int ret;
 
@@ -164,39 +76,39 @@ static void ws_panel_i2c_write(struct ws_panel *ts, u8 reg, u8 val)
 		dev_err(&ts->i2c->dev, "I2C write failed: %d\n", ret);
 }
 
-static int ws_panel_disable(struct drm_panel *panel)
+static int fx_panel_disable(struct drm_panel *panel)
 {
-	struct ws_panel *ts = panel_to_ts(panel);
+	struct fx_panel *ts = panel_to_ts(panel);
 
-	ws_panel_i2c_write(ts, 0xad, 0x00);
+	fx_panel_i2c_write(ts, 0xad, 0x00);
 
 	return 0;
 }
 
-static int ws_panel_unprepare(struct drm_panel *panel)
+static int fx_panel_unprepare(struct drm_panel *panel)
 {
 	return 0;
 }
 
-static int ws_panel_prepare(struct drm_panel *panel)
+static int fx_panel_prepare(struct drm_panel *panel)
 {
 	return 0;
 }
 
-static int ws_panel_enable(struct drm_panel *panel)
+static int fx_panel_enable(struct drm_panel *panel)
 {
-	struct ws_panel *ts = panel_to_ts(panel);
+	struct fx_panel *ts = panel_to_ts(panel);
 
-	ws_panel_i2c_write(ts, 0xad, 0x01);
+	fx_panel_i2c_write(ts, 0xad, 0x01);
 
 	return 0;
 }
 
-static int ws_panel_get_modes(struct drm_panel *panel,
+static int fx_panel_get_modes(struct drm_panel *panel,
 			      struct drm_connector *connector)
 {
 	static const u32 bus_format = MEDIA_BUS_FMT_RGB888_1X24;
-	struct ws_panel *ts = panel_to_ts(panel);
+	struct fx_panel *ts = panel_to_ts(panel);
 	struct drm_display_mode *mode;
 
 	mode = drm_mode_duplicate(connector->dev, ts->mode);
@@ -205,17 +117,16 @@ static int ws_panel_get_modes(struct drm_panel *panel,
 			ts->mode->hdisplay,
 			ts->mode->vdisplay,
 			drm_mode_vrefresh(ts->mode));
+		return -ENOMEM;
 	}
 
-	mode->type |= DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
-
+	mode->type = ts->mode->type;
 	drm_mode_set_name(mode);
-
 	drm_mode_probed_add(connector, mode);
 
 	connector->display_info.bpc = 8;
-	connector->display_info.width_mm = 154;
-	connector->display_info.height_mm = 86;
+	connector->display_info.width_mm = 154;   // 可根据实际屏幕尺寸调整
+	connector->display_info.height_mm = 86;   // 可根据实际屏幕尺寸调整
 	drm_display_info_set_bus_formats(&connector->display_info,
 					 &bus_format, 1);
 
@@ -228,38 +139,38 @@ static int ws_panel_get_modes(struct drm_panel *panel,
 	return 1;
 }
 
-static enum drm_panel_orientation ws_panel_get_orientation(struct drm_panel *panel)
+static enum drm_panel_orientation fx_panel_get_orientation(struct drm_panel *panel)
 {
-	struct ws_panel *ts = panel_to_ts(panel);
+	struct fx_panel *ts = panel_to_ts(panel);
 
 	return ts->orientation;
 }
 
-static const struct drm_panel_funcs ws_panel_funcs = {
-	.disable = ws_panel_disable,
-	.unprepare = ws_panel_unprepare,
-	.prepare = ws_panel_prepare,
-	.enable = ws_panel_enable,
-	.get_modes = ws_panel_get_modes,
-	.get_orientation = ws_panel_get_orientation,
+static const struct drm_panel_funcs fx_panel_funcs = {
+	.disable = fx_panel_disable,
+	.unprepare = fx_panel_unprepare,
+	.prepare = fx_panel_prepare,
+	.enable = fx_panel_enable,
+	.get_modes = fx_panel_get_modes,
+	.get_orientation = fx_panel_get_orientation,
 };
 
-static int ws_panel_bl_update_status(struct backlight_device *bl)
+static int fx_panel_bl_update_status(struct backlight_device *bl)
 {
-	struct ws_panel *ts = bl_get_data(bl);
+	struct fx_panel *ts = bl_get_data(bl);
 
-	ws_panel_i2c_write(ts, 0xab, 0xff - backlight_get_brightness(bl));
-	ws_panel_i2c_write(ts, 0xaa, 0x01);
+	fx_panel_i2c_write(ts, 0xab, 0xff - backlight_get_brightness(bl));
+	fx_panel_i2c_write(ts, 0xaa, 0x01);
 
 	return 0;
 }
 
-static const struct backlight_ops ws_panel_bl_ops = {
-	.update_status = ws_panel_bl_update_status,
+static const struct backlight_ops fx_panel_bl_ops = {
+	.update_status = fx_panel_bl_update_status,
 };
 
 static struct backlight_device *
-ws_panel_create_backlight(struct ws_panel *ts)
+fx_panel_create_backlight(struct fx_panel *ts)
 {
 	struct device *dev = ts->base.dev;
 	const struct backlight_properties props = {
@@ -269,27 +180,30 @@ ws_panel_create_backlight(struct ws_panel *ts)
 	};
 
 	return devm_backlight_device_register(dev, dev_name(dev), dev, ts,
-					      &ws_panel_bl_ops, &props);
+					      &fx_panel_bl_ops, &props);
 }
 
-static int ws_panel_probe(struct i2c_client *i2c)
+static int fx_panel_probe(struct i2c_client *i2c)
 {
 	struct device *dev = &i2c->dev;
-	struct ws_panel *ts;
+	struct fx_panel *ts;
 	struct device_node *endpoint, *dsi_host_node;
 	struct mipi_dsi_host *host;
 	struct mipi_dsi_device_info info = {
-		.type = WS_DSI_DRIVER_NAME,
+		.type = FX_DSI_DRIVER_NAME,
 		.channel = 0,
 		.node = NULL,
 	};
+	const struct fx_panel_data *_fx_panel_data;
 	int ret;
 
 	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
 	if (!ts)
 		return -ENOMEM;
 
-	ts->mode = of_device_get_match_data(dev);
+	_fx_panel_data = &custom_panel_data;  // 直接使用自定义面板数据
+
+	ts->mode = _fx_panel_data->mode;
 	if (!ts->mode)
 		return -EINVAL;
 
@@ -297,9 +211,10 @@ static int ws_panel_probe(struct i2c_client *i2c)
 
 	ts->i2c = i2c;
 
-	ws_panel_i2c_write(ts, 0xc0, 0x01);
-	ws_panel_i2c_write(ts, 0xc2, 0x01);
-	ws_panel_i2c_write(ts, 0xac, 0x01);
+	// 初始化I2C命令
+	fx_panel_i2c_write(ts, 0xc0, 0x01);
+	fx_panel_i2c_write(ts, 0xc2, 0x01);
+	fx_panel_i2c_write(ts, 0xac, 0x01);
 
 	ret = of_drm_get_panel_orientation(dev->of_node, &ts->orientation);
 	if (ret) {
@@ -336,10 +251,10 @@ static int ws_panel_probe(struct i2c_client *i2c)
 		return PTR_ERR(ts->dsi);
 	}
 
-	drm_panel_init(&ts->base, dev, &ws_panel_funcs,
+	drm_panel_init(&ts->base, dev, &fx_panel_funcs,
 		       DRM_MODE_CONNECTOR_DSI);
 
-	ts->base.backlight = ws_panel_create_backlight(ts);
+	ts->base.backlight = fx_panel_create_backlight(ts);
 	if (IS_ERR(ts->base.backlight)) {
 		ret = PTR_ERR(ts->base.backlight);
 		dev_err(dev, "Failed to create backlight: %d\n", ret);
@@ -351,10 +266,9 @@ static int ws_panel_probe(struct i2c_client *i2c)
 	 */
 	drm_panel_add(&ts->base);
 
-	ts->dsi->mode_flags =  MIPI_DSI_MODE_VIDEO_HSE | MIPI_DSI_MODE_VIDEO |
-			   MIPI_DSI_CLOCK_NON_CONTINUOUS;
+	ts->dsi->mode_flags = _fx_panel_data->mode_flags;
 	ts->dsi->format = MIPI_DSI_FMT_RGB888;
-	ts->dsi->lanes = 2;
+	ts->dsi->lanes = _fx_panel_data->lanes;
 
 	ret = devm_mipi_dsi_attach(dev, ts->dsi);
 
@@ -368,67 +282,42 @@ error:
 	return -ENODEV;
 }
 
-static void ws_panel_remove(struct i2c_client *i2c)
+static void fx_panel_remove(struct i2c_client *i2c)
 {
-	struct ws_panel *ts = i2c_get_clientdata(i2c);
+	struct fx_panel *ts = i2c_get_clientdata(i2c);
 
-	ws_panel_disable(&ts->base);
+	fx_panel_disable(&ts->base);
 
 	drm_panel_remove(&ts->base);
 }
 
-static void ws_panel_shutdown(struct i2c_client *i2c)
+static void fx_panel_shutdown(struct i2c_client *i2c)
 {
-	struct ws_panel *ts = i2c_get_clientdata(i2c);
+	struct fx_panel *ts = i2c_get_clientdata(i2c);
 
-	ws_panel_disable(&ts->base);
+	fx_panel_disable(&ts->base);
 }
 
-static const struct of_device_id ws_panel_of_ids[] = {
+static const struct of_device_id fx_panel_of_ids[] = {
 	{
-		.compatible = "waveshare,2.8inch-panel",
-		.data = &ws_panel_2_8_mode,
-	}, {
-		.compatible = "waveshare,3.4inch-panel",
-		.data = &ws_panel_3_4_mode,
-	}, {
-		.compatible = "waveshare,4.0inch-panel",
-		.data = &ws_panel_4_0_mode,
-	}, {
-		.compatible = "waveshare,7.0inch-c-panel",
-		.data = &ws_panel_7_0_c_mode,
-	}, {
-		.compatible = "waveshare,7.9inch-panel",
-		.data = &ws_panel_7_9_mode,
-	}, {
-		.compatible = "waveshare,8.0inch-panel",
-		.data = &ws_panel_10_1_mode,
-	}, {
-		.compatible = "waveshare,10.1inch-panel",
-		.data = &ws_panel_10_1_mode,
-	}, {
-		.compatible = "waveshare,11.9inch-panel",
-		.data = &ws_panel_11_9_mode,
-	}, {
-		.compatible = "waveshare,4inch-panel",
-		.data = &ws_panel_4_mode,
-	}, {
-		/* sentinel */
-	}
-};
-MODULE_DEVICE_TABLE(of, ws_panel_of_ids);
-
-static struct i2c_driver ws_panel_driver = {
-	.driver = {
-		.name = "ws_touchscreen",
-		.of_match_table = ws_panel_of_ids,
+		.compatible = "fx,custom-panel",  // 自定义设备树兼容名
+		.data = &custom_panel_data,
 	},
-	.probe = ws_panel_probe,
-	.remove = ws_panel_remove,
-	.shutdown = ws_panel_shutdown,
+	{ /* sentinel */ }
 };
-module_i2c_driver(ws_panel_driver);
+MODULE_DEVICE_TABLE(of, fx_panel_of_ids);
+
+static struct i2c_driver fx_panel_driver = {
+	.driver = {
+		.name = "fx_touchscreen",  // 驱动名称改为fx_touchscreen
+		.of_match_table = fx_panel_of_ids,
+	},
+	.probe = fx_panel_probe,
+	.remove = fx_panel_remove,
+	.shutdown = fx_panel_shutdown,
+};
+module_i2c_driver(fx_panel_driver);
 
 MODULE_AUTHOR("Dave Stevenson <dave.stevenson@raspberrypi.com>");
-MODULE_DESCRIPTION("Waveshare DSI panel driver");
+MODULE_DESCRIPTION("FX DSI panel driver");  // 描述改为FX DSI
 MODULE_LICENSE("GPL");
