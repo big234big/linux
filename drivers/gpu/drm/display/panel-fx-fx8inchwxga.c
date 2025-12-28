@@ -4,390 +4,329 @@
 ** Driver IC: JD9365
 */
 
-#include <drm/drm_mipi_dsi.h>
-#include <drm/drm_modes.h>
-#include <drm/drm_panel.h>
-#include <drm/drm_print.h>
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright © 2023 Raspberry Pi Ltd
+ *
+ * Based on panel-raspberrypi-touchscreen by Broadcom
+ */
+
+#include <linux/backlight.h>
 #include <linux/delay.h>
-#include <linux/gpio/consumer.h>
+#include <linux/err.h>
+#include <linux/fb.h>
+#include <linux/i2c.h>
+#include <linux/media-bus-format.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/regulator/consumer.h>
-#include <video/mipi_display.h>
+#include <linux/of_graph.h>
+#include <linux/pm.h>
 
-struct fx8inchwxga_panel_desc {
-  const struct drm_display_mode *mode;
-  unsigned int lanes;
-  unsigned long flags;
-  enum mipi_dsi_pixel_format format;
+#include <drm/drm_crtc.h>
+#include <drm/drm_device.h>
+#include <drm/drm_mipi_dsi.h>
+#include <drm/drm_panel.h>
+
+#define FX_DSI_DRIVER_NAME "fx-ts-dsi"
+
+struct fx_panel {
+	struct drm_panel base;
+	struct mipi_dsi_device *dsi;
+	struct i2c_client *i2c;
+	const struct drm_display_mode *mode;
+	enum drm_panel_orientation orientation;
 };
 
-struct fx8inchwxga {
-  struct drm_panel panel;
-  struct mipi_dsi_device *dsi;
-  const struct fx8inchwxga_panel_desc *desc;
-  struct gpio_desc *reset;
+struct fx_panel_data {
+	const struct drm_display_mode *mode;
+	int lanes;
+	unsigned long mode_flags;
 };
 
-static inline struct fx8inchwxga *panel_to_fx8inchwxga(struct drm_panel *panel) {
-  return container_of(panel, struct fx8inchwxga, panel);
-}
-
-static inline int fx8inchwxga_dsi_write(struct fx8inchwxga *fx8inchwxga,
-                                       const void *seq, size_t len) {
-  return mipi_dsi_dcs_write_buffer(fx8inchwxga->dsi, seq, len);
-}
-
-#define fx8inchwxga_command(fx8inchwxga, seq...)          \
-  {                                                     \
-    const uint8_t d[] = {seq};                          \
-    fx8inchwxga_dsi_write(fx8inchwxga, d, ARRAY_SIZE(d)); \
-  }
-
-static void fx8inchwxga_init_sequence(struct fx8inchwxga *fx8inchwxga) {
-  fx8inchwxga_command(fx8inchwxga, 0xE0, 0x00);
-
-  fx8inchwxga_command(fx8inchwxga, 0xE1, 0x93);
-  fx8inchwxga_command(fx8inchwxga, 0xE2, 0x65);
-  fx8inchwxga_command(fx8inchwxga, 0xE3, 0xF8);
-  fx8inchwxga_command(fx8inchwxga, 0x80, 0x03);
-
-  fx8inchwxga_command(fx8inchwxga, 0xE0, 0x01);
-  fx8inchwxga_command(fx8inchwxga, 0x00, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x01, 0x72);
-  fx8inchwxga_command(fx8inchwxga, 0x03, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x04, 0x80);
-
-
-  fx8inchwxga_command(fx8inchwxga, 0x17, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x18, 0xAF);
-  fx8inchwxga_command(fx8inchwxga, 0x19, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x1A, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x1B, 0xAF);
-  fx8inchwxga_command(fx8inchwxga, 0x1C, 0x00);
-
-  fx8inchwxga_command(fx8inchwxga, 0x24, 0xFE);
-
-  fx8inchwxga_command(fx8inchwxga, 0x37, 0x19);
-  fx8inchwxga_command(fx8inchwxga, 0x38, 0x05);
-  fx8inchwxga_command(fx8inchwxga, 0x39, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x3A, 0x01);
-  fx8inchwxga_command(fx8inchwxga, 0x3B, 0x01);
-  fx8inchwxga_command(fx8inchwxga, 0x3C, 0x70);
-  fx8inchwxga_command(fx8inchwxga, 0x3D, 0xFF);
-  fx8inchwxga_command(fx8inchwxga, 0x3E, 0xFF);
-  fx8inchwxga_command(fx8inchwxga, 0x3F, 0xFF);
-
-  fx8inchwxga_command(fx8inchwxga, 0x40, 0x06);
-  fx8inchwxga_command(fx8inchwxga, 0x41, 0xA0);
-  fx8inchwxga_command(fx8inchwxga, 0x43, 0x1E);
-  fx8inchwxga_command(fx8inchwxga, 0x44, 0x10);
-  fx8inchwxga_command(fx8inchwxga, 0x45, 0x28);
-  fx8inchwxga_command(fx8inchwxga, 0x4B, 0x04);
-
-  fx8inchwxga_command(fx8inchwxga, 0x55, 0x02);
-  fx8inchwxga_command(fx8inchwxga, 0x56, 0x01);
-  fx8inchwxga_command(fx8inchwxga, 0x57, 0xA9);
-
-  fx8inchwxga_command(fx8inchwxga, 0x58, 0x0A);
-  fx8inchwxga_command(fx8inchwxga, 0x59, 0x0A);
-  fx8inchwxga_command(fx8inchwxga, 0x5A, 0x37);
-  fx8inchwxga_command(fx8inchwxga, 0x5B, 0x1A);
-
-  fx8inchwxga_command(fx8inchwxga, 0x5D, 0x7F);
-  fx8inchwxga_command(fx8inchwxga, 0x5E, 0x6A);
-  fx8inchwxga_command(fx8inchwxga, 0x5F, 0x5B);
-  fx8inchwxga_command(fx8inchwxga, 0x60, 0x50);
-  fx8inchwxga_command(fx8inchwxga, 0x61, 0x4D);
-  fx8inchwxga_command(fx8inchwxga, 0x62, 0x3F);
-  fx8inchwxga_command(fx8inchwxga, 0x63, 0x44);
-  fx8inchwxga_command(fx8inchwxga, 0x64, 0x2E);
-  fx8inchwxga_command(fx8inchwxga, 0x65, 0x49);
-  fx8inchwxga_command(fx8inchwxga, 0x66, 0x48);
-  fx8inchwxga_command(fx8inchwxga, 0x67, 0x48);
-  fx8inchwxga_command(fx8inchwxga, 0x68, 0x66);
-  fx8inchwxga_command(fx8inchwxga, 0x69, 0x54);
-  fx8inchwxga_command(fx8inchwxga, 0x6A, 0x5A);
-  fx8inchwxga_command(fx8inchwxga, 0x6B, 0x4C);
-  fx8inchwxga_command(fx8inchwxga, 0x6C, 0x44);
-  fx8inchwxga_command(fx8inchwxga, 0x6D, 0x37);
-  fx8inchwxga_command(fx8inchwxga, 0x6E, 0x23);
-  fx8inchwxga_command(fx8inchwxga, 0x6F, 0x10);
-  fx8inchwxga_command(fx8inchwxga, 0x70, 0x7F);
-  fx8inchwxga_command(fx8inchwxga, 0x71, 0x6A);
-  fx8inchwxga_command(fx8inchwxga, 0x72, 0x5B);
-  fx8inchwxga_command(fx8inchwxga, 0x73, 0x50);
-  fx8inchwxga_command(fx8inchwxga, 0x74, 0x4D);
-  fx8inchwxga_command(fx8inchwxga, 0x75, 0x3F);
-  fx8inchwxga_command(fx8inchwxga, 0x76, 0x44);
-  fx8inchwxga_command(fx8inchwxga, 0x77, 0x2E);
-  fx8inchwxga_command(fx8inchwxga, 0x78, 0x49);
-  fx8inchwxga_command(fx8inchwxga, 0x79, 0x48);
-  fx8inchwxga_command(fx8inchwxga, 0x7A, 0x48);
-  fx8inchwxga_command(fx8inchwxga, 0x7B, 0x66);
-  fx8inchwxga_command(fx8inchwxga, 0x7C, 0x54);
-  fx8inchwxga_command(fx8inchwxga, 0x7D, 0x5A);
-  fx8inchwxga_command(fx8inchwxga, 0x7E, 0x4C);
-  fx8inchwxga_command(fx8inchwxga, 0x7F, 0x44);
-  fx8inchwxga_command(fx8inchwxga, 0x80, 0x37);
-  fx8inchwxga_command(fx8inchwxga, 0x81, 0x23);
-  fx8inchwxga_command(fx8inchwxga, 0x82, 0x10);
-
-  fx8inchwxga_command(fx8inchwxga, 0xE0, 0x02);
-  fx8inchwxga_command(fx8inchwxga, 0x00, 0x4B);
-  fx8inchwxga_command(fx8inchwxga, 0x01, 0x4B);
-  fx8inchwxga_command(fx8inchwxga, 0x02, 0x49);
-  fx8inchwxga_command(fx8inchwxga, 0x03, 0x49);
-  fx8inchwxga_command(fx8inchwxga, 0x04, 0x47);
-  fx8inchwxga_command(fx8inchwxga, 0x05, 0x47);
-  fx8inchwxga_command(fx8inchwxga, 0x06, 0x45);
-  fx8inchwxga_command(fx8inchwxga, 0x07, 0x45);
-  fx8inchwxga_command(fx8inchwxga, 0x08, 0x41);
-  fx8inchwxga_command(fx8inchwxga, 0x09, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x0A, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x0B, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x0C, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x0D, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x0E, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x0F, 0x5F);
-  fx8inchwxga_command(fx8inchwxga, 0x10, 0x5F);
-  fx8inchwxga_command(fx8inchwxga, 0x11, 0x57);
-  fx8inchwxga_command(fx8inchwxga, 0x12, 0x77);
-  fx8inchwxga_command(fx8inchwxga, 0x13, 0x35);
-  fx8inchwxga_command(fx8inchwxga, 0x14, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x15, 0x1F);
-
-  fx8inchwxga_command(fx8inchwxga, 0x16, 0x4A);
-  fx8inchwxga_command(fx8inchwxga, 0x17, 0x4A);
-  fx8inchwxga_command(fx8inchwxga, 0x18, 0x48);
-  fx8inchwxga_command(fx8inchwxga, 0x19, 0x48);
-  fx8inchwxga_command(fx8inchwxga, 0x1A, 0x46);
-  fx8inchwxga_command(fx8inchwxga, 0x1B, 0x46);
-  fx8inchwxga_command(fx8inchwxga, 0x1C, 0x44);
-  fx8inchwxga_command(fx8inchwxga, 0x1D, 0x44);
-  fx8inchwxga_command(fx8inchwxga, 0x1E, 0x40);
-  fx8inchwxga_command(fx8inchwxga, 0x1F, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x20, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x21, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x22, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x23, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x24, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x25, 0x5F);
-  fx8inchwxga_command(fx8inchwxga, 0x26, 0x5F);
-  fx8inchwxga_command(fx8inchwxga, 0x27, 0x57);
-  fx8inchwxga_command(fx8inchwxga, 0x28, 0x77);
-  fx8inchwxga_command(fx8inchwxga, 0x29, 0x35);
-  fx8inchwxga_command(fx8inchwxga, 0x2A, 0x1F);
-  fx8inchwxga_command(fx8inchwxga, 0x2B, 0x1F);
-
-
-
-  fx8inchwxga_command(fx8inchwxga, 0x58, 0x40);
-  fx8inchwxga_command(fx8inchwxga, 0x59, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x5A, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x5B, 0x10);
-  fx8inchwxga_command(fx8inchwxga, 0x5C, 0x02);
-  fx8inchwxga_command(fx8inchwxga, 0x5D, 0x40);
-  fx8inchwxga_command(fx8inchwxga, 0x5E, 0x01);
-  fx8inchwxga_command(fx8inchwxga, 0x5F, 0x02);
-  fx8inchwxga_command(fx8inchwxga, 0x60, 0x30);
-  fx8inchwxga_command(fx8inchwxga, 0x61, 0x01);
-  fx8inchwxga_command(fx8inchwxga, 0x62, 0x02);
-  fx8inchwxga_command(fx8inchwxga, 0x63, 0x03);
-  fx8inchwxga_command(fx8inchwxga, 0x64, 0x6B);
-  fx8inchwxga_command(fx8inchwxga, 0x65, 0x05);
-  fx8inchwxga_command(fx8inchwxga, 0x66, 0x0C);
-  fx8inchwxga_command(fx8inchwxga, 0x67, 0x73);
-  fx8inchwxga_command(fx8inchwxga, 0x68, 0x06);
-  fx8inchwxga_command(fx8inchwxga, 0x69, 0x03);
-  fx8inchwxga_command(fx8inchwxga, 0x6A, 0x56);
-  fx8inchwxga_command(fx8inchwxga, 0x6B, 0x08);
-  fx8inchwxga_command(fx8inchwxga, 0x6C, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x6D, 0x04);
-  fx8inchwxga_command(fx8inchwxga, 0x6E, 0x04);
-  fx8inchwxga_command(fx8inchwxga, 0x6F, 0x88);
-  fx8inchwxga_command(fx8inchwxga, 0x70, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x71, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x72, 0x06);
-  fx8inchwxga_command(fx8inchwxga, 0x73, 0x7B);
-  fx8inchwxga_command(fx8inchwxga, 0x74, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x75, 0xF8);
-  fx8inchwxga_command(fx8inchwxga, 0x76, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x77, 0xD5);
-  fx8inchwxga_command(fx8inchwxga, 0x78, 0x2E);
-  fx8inchwxga_command(fx8inchwxga, 0x79, 0x12);
-  fx8inchwxga_command(fx8inchwxga, 0x7A, 0x03);
-  fx8inchwxga_command(fx8inchwxga, 0x7B, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x7C, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x7D, 0x03);
-  fx8inchwxga_command(fx8inchwxga, 0x7E, 0x7B);
-
-
-  fx8inchwxga_command(fx8inchwxga, 0xE0, 0x04);
-  fx8inchwxga_command(fx8inchwxga, 0x00, 0x0E);
-  fx8inchwxga_command(fx8inchwxga, 0x02, 0xB3);
-  fx8inchwxga_command(fx8inchwxga, 0x09, 0x60);
-  fx8inchwxga_command(fx8inchwxga, 0x0E, 0x2A);
-  fx8inchwxga_command(fx8inchwxga, 0x36, 0x59);
-
-
-  fx8inchwxga_command(fx8inchwxga, 0xE0, 0x00);
-  fx8inchwxga_command(fx8inchwxga, 0x51, 0x80);
-  fx8inchwxga_command(fx8inchwxga, 0x53, 0x2C);
-  fx8inchwxga_command(fx8inchwxga, 0x55, 0x00);
-;
-}
-
-static int fx8inchwxga_prepare(struct drm_panel *panel) {
-  struct fx8inchwxga *fx8inchwxga = panel_to_fx8inchwxga(panel);
-  gpiod_set_value(fx8inchwxga->reset, 0);
-
-  msleep(50);
-  gpiod_set_value(fx8inchwxga->reset, 1);
-  msleep(150);
-  mipi_dsi_dcs_soft_reset(fx8inchwxga->dsi);
-
-  msleep(5);
-
-  fx8inchwxga_init_sequence(fx8inchwxga);
-
-  mipi_dsi_dcs_set_tear_on(fx8inchwxga->dsi, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
-  mipi_dsi_dcs_exit_sleep_mode(fx8inchwxga->dsi);
-  return 0;
-}
-
-static int fx8inchwxga_enable(struct drm_panel *panel) {
-  return mipi_dsi_dcs_set_display_on(panel_to_fx8inchwxga(panel)->dsi);
-}
-
-static int fx8inchwxga_disable(struct drm_panel *panel) {
-  return mipi_dsi_dcs_set_display_off(panel_to_fx8inchwxga(panel)->dsi);
-}
-
-static int fx8inchwxga_unprepare(struct drm_panel *panel) {
-  struct fx8inchwxga *fx8inchwxga = panel_to_fx8inchwxga(panel);
-
-  mipi_dsi_dcs_enter_sleep_mode(fx8inchwxga->dsi);
-
-  gpiod_set_value(fx8inchwxga->reset, 0);
-
-  return 0;
-}
-
-static int fx8inchwxga_get_modes(struct drm_panel *panel,
-                                struct drm_connector *connector) {
-  struct fx8inchwxga *fx8inchwxga = panel_to_fx8inchwxga(panel);
-  const struct drm_display_mode *desc_mode = fx8inchwxga->desc->mode;
-  struct drm_display_mode *mode;
-
-  mode = drm_mode_duplicate(connector->dev, desc_mode);
-  if (!mode) {
-    dev_err(&fx8inchwxga->dsi->dev, "failed to add mode %ux%u@%u\n",
-            desc_mode->hdisplay, desc_mode->vdisplay,
-            drm_mode_vrefresh(desc_mode));
-    return -ENOMEM;
-  }
-
-  drm_mode_set_name(mode);
-  drm_mode_probed_add(connector, mode);
-
-  connector->display_info.width_mm = desc_mode->width_mm;
-  connector->display_info.height_mm = desc_mode->height_mm;
-
-  return 1;
-}
-
-static const struct drm_panel_funcs fx8inchwxga_funcs = {
-    .disable = fx8inchwxga_disable,
-    .unprepare = fx8inchwxga_unprepare,
-    .prepare = fx8inchwxga_prepare,
-    .enable = fx8inchwxga_enable,
-    .get_modes = fx8inchwxga_get_modes,
+/* 自定义显示屏时序 - 根据设备树参数转换 */
+static const struct drm_display_mode custom_panel_mode = {
+	.clock = 72400,            // clock-frequency = <72400000> (kHz单位)
+	.hdisplay = 1280,          // hactive = <1280>
+	.hsync_start = 1280 + 72,  // hfront-porch = <72>
+	.hsync_end = 1280 + 72 + 10, // hsync-len = <10>
+	.htotal = 1280 + 72 + 10 + 78, // hback-porch = <78>
+	.vdisplay = 800,           // vactive = <800>
+	.vsync_start = 800 + 15,   // vfront-porch = <15>
+	.vsync_end = 800 + 15 + 5, // vsync-len = <5>
+	.vtotal = 800 + 15 + 5 + 18, // vback-porch = <18>
+	.vrefresh = 60,            // 计算刷新率：72400000/(1440*838)≈60.1Hz
+	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC |  // hsync-active<0, vsync-active<0
+		 DRM_MODE_FLAG_NCSYNC |  // de-active = <0>
+		 DRM_MODE_FLAG_PCSYNC,   // pixelclk-active =<1>
+	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
-static const struct drm_display_mode fx8inchwxga_mode = {
-    .clock = 25000,
-
-    .hdisplay = 800,
-    .hsync_start = 800 + /* HFP */ 32,
-    .hsync_end = 800 + 32 + /* HSync */ 20,
-    .htotal = 800 + 32 + 20 + /* HBP */ 20,
-
-    .vdisplay = 1280,
-    .vsync_start = 1280 + /* VFP */ 8,
-    .vsync_end = 640 + 8 + /* VSync */ 4,
-    .vtotal = 640 + 8 + 4 + /* VBP */ 4,
-
-    .width_mm = 107.6,
-    .height_mm = 172.2,
-
-    .type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
+static const struct fx_panel_data custom_panel_data = {
+	.mode = &custom_panel_mode,
+	.lanes = 4,
+	.mode_flags = MIPI_DSI_MODE_VIDEO_HSE | MIPI_DSI_MODE_VIDEO | MIPI_DSI_CLOCK_NON_CONTINUOUS,
 };
 
-static const struct fx8inchwxga_panel_desc fx8inchwxga_desc = {
-    .mode = &fx8inchwxga_mode,
-    .lanes = 4,
-    .flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST,
-    .format = MIPI_DSI_FMT_RGB888,
-};
-
-static int fx8inchwxga_dsi_probe(struct mipi_dsi_device *dsi) {
-  struct fx8inchwxga *fx8inchwxga =
-      devm_kzalloc(&dsi->dev, sizeof(*fx8inchwxga), GFP_KERNEL);
-  if (!fx8inchwxga) return -ENOMEM;
-
-  const struct fx8inchwxga_panel_desc *desc =
-      of_device_get_match_data(&dsi->dev);
-  dsi->mode_flags = desc->flags;
-  dsi->format = desc->format;
-  dsi->lanes = desc->lanes;
-
-  fx8inchwxga->reset = devm_gpiod_get(&dsi->dev, "reset", GPIOD_OUT_LOW);
-  if (IS_ERR(fx8inchwxga->reset)) {
-    dev_err(&dsi->dev, "Couldn't get our reset GPIO\n");
-    return PTR_ERR(fx8inchwxga->reset);
-  }
-
-  drm_panel_init(&fx8inchwxga->panel, &dsi->dev, &fx8inchwxga_funcs,
-                 DRM_MODE_CONNECTOR_DSI);
-
-  int ret = drm_panel_of_backlight(&fx8inchwxga->panel);
-  if (ret) return ret;
-
-  drm_panel_add(&fx8inchwxga->panel);
-
-  mipi_dsi_set_drvdata(dsi, fx8inchwxga);
-  fx8inchwxga->dsi = dsi;
-  fx8inchwxga->desc = desc;
-
-  return mipi_dsi_attach(dsi);
+static struct fx_panel *panel_to_ts(struct drm_panel *panel)
+{
+	return container_of(panel, struct fx_panel, base);
 }
 
-static int fx8inchwxga_dsi_remove(struct mipi_dsi_device *dsi) {
-  struct fx8inchwxga *fx8inchwxga = mipi_dsi_get_drvdata(dsi);
+static void fx_panel_i2c_write(struct fx_panel *ts, u8 reg, u8 val)
+{
+	int ret;
 
-  mipi_dsi_detach(dsi);
-  drm_panel_remove(&fx8inchwxga->panel);
-
-  return 0;
+	ret = i2c_smbus_write_byte_data(ts->i2c, reg, val);
+	if (ret)
+		dev_err(&ts->i2c->dev, "I2C write failed: %d\n", ret);
 }
 
-static const struct of_device_id fx8inchwxga_of_match[] = {
-    {.compatible = "wlk,fx8inchwxga", .data = &fx8inchwxga_desc}, {}};
-MODULE_DEVICE_TABLE(of, fx8inchwxga_of_match);
+static int fx_panel_disable(struct drm_panel *panel)
+{
+	struct fx_panel *ts = panel_to_ts(panel);
 
-static struct mipi_dsi_driver fx8inchwxga_dsi_driver = {
-    .probe = fx8inchwxga_dsi_probe,
-    .remove = fx8inchwxga_dsi_remove,
-    .driver =
-        {
-            .name = "fx8inchwxga",
-            .of_match_table = fx8inchwxga_of_match,
-        },
+	fx_panel_i2c_write(ts, 0xad, 0x00);
+
+	return 0;
+}
+
+static int fx_panel_unprepare(struct drm_panel *panel)
+{
+	return 0;
+}
+
+static int fx_panel_prepare(struct drm_panel *panel)
+{
+	return 0;
+}
+
+static int fx_panel_enable(struct drm_panel *panel)
+{
+	struct fx_panel *ts = panel_to_ts(panel);
+
+	fx_panel_i2c_write(ts, 0xad, 0x01);
+
+	return 0;
+}
+
+static int fx_panel_get_modes(struct drm_panel *panel,
+			      struct drm_connector *connector)
+{
+	static const u32 bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+	struct fx_panel *ts = panel_to_ts(panel);
+	struct drm_display_mode *mode;
+
+	mode = drm_mode_duplicate(connector->dev, ts->mode);
+	if (!mode) {
+		dev_err(panel->dev, "failed to add mode %ux%u@%u\n",
+			ts->mode->hdisplay,
+			ts->mode->vdisplay,
+			drm_mode_vrefresh(ts->mode));
+		return -ENOMEM;
+	}
+
+	mode->type = ts->mode->type;
+	drm_mode_set_name(mode);
+	drm_mode_probed_add(connector, mode);
+
+	connector->display_info.bpc = 8;
+	connector->display_info.width_mm = 154;   // 可根据实际屏幕尺寸调整
+	connector->display_info.height_mm = 86;   // 可根据实际屏幕尺寸调整
+	drm_display_info_set_bus_formats(&connector->display_info,
+					 &bus_format, 1);
+
+	/*
+	 * TODO: Remove once all drm drivers call
+	 * drm_connector_set_orientation_from_panel()
+	 */
+	drm_connector_set_panel_orientation(connector, ts->orientation);
+
+	return 1;
+}
+
+static enum drm_panel_orientation fx_panel_get_orientation(struct drm_panel *panel)
+{
+	struct fx_panel *ts = panel_to_ts(panel);
+
+	return ts->orientation;
+}
+
+static const struct drm_panel_funcs fx_panel_funcs = {
+	.disable = fx_panel_disable,
+	.unprepare = fx_panel_unprepare,
+	.prepare = fx_panel_prepare,
+	.enable = fx_panel_enable,
+	.get_modes = fx_panel_get_modes,
+	.get_orientation = fx_panel_get_orientation,
 };
-module_mipi_dsi_driver(fx8inchwxga_dsi_driver);
 
-MODULE_AUTHOR("frank@lcddisplay.co");
-MODULE_DESCRIPTION("fx8inchwxga LCD Panel Driver");
+static int fx_panel_bl_update_status(struct backlight_device *bl)
+{
+	struct fx_panel *ts = bl_get_data(bl);
+
+	fx_panel_i2c_write(ts, 0xab, 0xff - backlight_get_brightness(bl));
+	fx_panel_i2c_write(ts, 0xaa, 0x01);
+
+	return 0;
+}
+
+static const struct backlight_ops fx_panel_bl_ops = {
+	.update_status = fx_panel_bl_update_status,
+};
+
+static struct backlight_device *
+fx_panel_create_backlight(struct fx_panel *ts)
+{
+	struct device *dev = ts->base.dev;
+	const struct backlight_properties props = {
+		.type = BACKLIGHT_RAW,
+		.brightness = 255,
+		.max_brightness = 255,
+	};
+
+	return devm_backlight_device_register(dev, dev_name(dev), dev, ts,
+					      &fx_panel_bl_ops, &props);
+}
+
+static int fx_panel_probe(struct i2c_client *i2c)
+{
+	struct device *dev = &i2c->dev;
+	struct fx_panel *ts;
+	struct device_node *endpoint, *dsi_host_node;
+	struct mipi_dsi_host *host;
+	struct mipi_dsi_device_info info = {
+		.type = FX_DSI_DRIVER_NAME,
+		.channel = 0,
+		.node = NULL,
+	};
+	const struct fx_panel_data *_fx_panel_data;
+	int ret;
+
+	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
+	if (!ts)
+		return -ENOMEM;
+
+	_fx_panel_data = &custom_panel_data;  // 直接使用自定义面板数据
+
+	ts->mode = _fx_panel_data->mode;
+	if (!ts->mode)
+		return -EINVAL;
+
+	i2c_set_clientdata(i2c, ts);
+
+	ts->i2c = i2c;
+
+	// 初始化I2C命令
+	fx_panel_i2c_write(ts, 0xc0, 0x01);
+	fx_panel_i2c_write(ts, 0xc2, 0x01);
+	fx_panel_i2c_write(ts, 0xac, 0x01);
+
+	ret = of_drm_get_panel_orientation(dev->of_node, &ts->orientation);
+	if (ret) {
+		dev_err(dev, "%pOF: failed to get orientation %d\n", dev->of_node, ret);
+		return ret;
+	}
+
+	/* Look up the DSI host.  It needs to probe before we do. */
+	endpoint = of_graph_get_next_endpoint(dev->of_node, NULL);
+	if (!endpoint)
+		return -ENODEV;
+
+	dsi_host_node = of_graph_get_remote_port_parent(endpoint);
+	if (!dsi_host_node)
+		goto error;
+
+	host = of_find_mipi_dsi_host_by_node(dsi_host_node);
+	of_node_put(dsi_host_node);
+	if (!host) {
+		of_node_put(endpoint);
+		return -EPROBE_DEFER;
+	}
+
+	info.node = of_graph_get_remote_port(endpoint);
+	if (!info.node)
+		goto error;
+
+	of_node_put(endpoint);
+
+	ts->dsi = devm_mipi_dsi_device_register_full(dev, host, &info);
+	if (IS_ERR(ts->dsi)) {
+		dev_err(dev, "DSI device registration failed: %ld\n",
+			PTR_ERR(ts->dsi));
+		return PTR_ERR(ts->dsi);
+	}
+
+	drm_panel_init(&ts->base, dev, &fx_panel_funcs,
+		       DRM_MODE_CONNECTOR_DSI);
+
+	ts->base.backlight = fx_panel_create_backlight(ts);
+	if (IS_ERR(ts->base.backlight)) {
+		ret = PTR_ERR(ts->base.backlight);
+		dev_err(dev, "Failed to create backlight: %d\n", ret);
+		return ret;
+	}
+
+	/* This appears last, as it's what will unblock the DSI host
+	 * driver's component bind function.
+	 */
+	drm_panel_add(&ts->base);
+
+	ts->dsi->mode_flags = _fx_panel_data->mode_flags;
+	ts->dsi->format = MIPI_DSI_FMT_RGB888;
+	ts->dsi->lanes = _fx_panel_data->lanes;
+
+	ret = devm_mipi_dsi_attach(dev, ts->dsi);
+
+	if (ret)
+		dev_err(dev, "failed to attach dsi to host: %d\n", ret);
+
+	return 0;
+
+error:
+	of_node_put(endpoint);
+	return -ENODEV;
+}
+
+static void fx_panel_remove(struct i2c_client *i2c)
+{
+	struct fx_panel *ts = i2c_get_clientdata(i2c);
+
+	fx_panel_disable(&ts->base);
+
+	drm_panel_remove(&ts->base);
+}
+
+static void fx_panel_shutdown(struct i2c_client *i2c)
+{
+	struct fx_panel *ts = i2c_get_clientdata(i2c);
+
+	fx_panel_disable(&ts->base);
+}
+
+static const struct of_device_id fx_panel_of_ids[] = {
+	{
+		.compatible = "fx,custom-panel",  // 自定义设备树兼容名
+		.data = &custom_panel_data,
+	},
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, fx_panel_of_ids);
+
+static struct i2c_driver fx_panel_driver = {
+	.driver = {
+		.name = "fx_touchscreen",  // 驱动名称改为fx_touchscreen
+		.of_match_table = fx_panel_of_ids,
+	},
+	.probe = fx_panel_probe,
+	.remove = fx_panel_remove,
+	.shutdown = fx_panel_shutdown,
+};
+module_i2c_driver(fx_panel_driver);
+
+MODULE_AUTHOR("Dave Stevenson <dave.stevenson@raspberrypi.com>");
+MODULE_DESCRIPTION("FX DSI panel driver");  // 描述改为FX DSI
 MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL");
+
 
