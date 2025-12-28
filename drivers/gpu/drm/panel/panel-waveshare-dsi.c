@@ -36,15 +36,20 @@ struct ws_panel {
  * https://www.waveshare.com/product/raspberry-pi/displays/2.8inch-dsi-lcd.htm
  */
 static const struct drm_display_mode ws_panel_2_8_mode = {
-	.clock = 50000,
-	.hdisplay = 480,
-	.hsync_start = 480 + 150,
-	.hsync_end = 480 + 150 + 50,
-	.htotal = 480 + 150 + 50 + 150,
-	.vdisplay = 640,
-	.vsync_start = 640 + 150,
-	.vsync_end = 640 + 150 + 50,
-	.vtotal = 640 + 150 + 50 + 150,
+.clock = 72400,            // clock-frequency = <72400000> (kHz单位)
+	.hdisplay = 1280,          // hactive = <1280>
+	.hsync_start = 1280 + 72,  // hfront-porch = <72>
+	.hsync_end = 1280 + 72 + 10, // hsync-len = <10>
+	.htotal = 1280 + 72 + 10 + 78, // hback-porch = <78>
+	.vdisplay = 800,           // vactive = <800>
+	.vsync_start = 800 + 15,   // vfront-porch = <15>
+	.vsync_end = 800 + 15 + 5, // vsync-len = <5>
+	.vtotal = 800 + 15 + 5 + 18, // vback-porch = <18>
+	.vrefresh = 60,            // 计算刷新率：72400000/(1440*838)≈60.1Hz
+	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC |  // hsync-active<0, vsync-active<0
+		 DRM_MODE_FLAG_NCSYNC |  // de-active = <0>
+		 DRM_MODE_FLAG_PCSYNC,   // pixelclk-active =<1>
+	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
 /* 3.4inch 800x800 Round
